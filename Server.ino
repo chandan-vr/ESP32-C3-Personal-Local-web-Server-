@@ -1,3 +1,4 @@
+
 /*
 ========================================================
               TECHNICAL BD SERVER
@@ -7,26 +8,30 @@ WiFi Name : Technical BD Server
 Password  : ChangeMe123
 Dashboard : http://192.168.4.1
 
-Required:
-- ESP32 board package
-- ArduinoJson 6.x
-
-Features:
+FEATURES:
 - Account Setup / Login / Logout
+- Automatic Firmware Change Detection
+- Automatic Full Data Reset on New Firmware
 - File Manager
 - Create Folder / Text Document
 - Open / Edit / Save
 - Folder Navigation
 - Three-dot Menu
 - Delete Box / Restore
-- Permanent Delete (recursive)
+- Permanent Recursive Delete
 - Storage Information
 - Light / Dark Theme
 - Accent Color
 - Change Password
 - JSON Backup
-- All Data Reset
-- LittleFS persistent storage
+- Manual All Data Reset
+- LittleFS Persistent Storage
+
+RESET BEHAVIOR:
+New Firmware MD5 = Different
+Then LittleFS + Preferences Reset
+
+Same Firmware = Data Preserved
 ========================================================
 */
 
@@ -43,7 +48,7 @@ Features:
 const char* AP_SSID = "Technical BD Server";
 const char* AP_PASS = "ChangeMe123";
 
-const char* DB_FILE  = "/vault.json";
+const char* DB_FILE = "/vault.json";
 const char* TMP_FILE = "/vault.tmp";
 const char* BAK_FILE = "/vault.bak";
 
@@ -62,7 +67,127 @@ String sessionID;
 String currentTheme = "light";
 String currentAccent = "#2563eb";
 
-// ---------------- WEB PAGE ----------------
+// ========================================================
+// AUTOMATIC FIRMWARE RESET SYSTEM
+// ========================================================
+
+bool checkFirmwareAndReset() {
+
+  String currentMD5 = ESP.getSketchMD5();
+
+  if (currentMD5.length() == 0) {
+    Serial.println("Firmware MD5 unavailable.");
+    return false;
+  }
+
+  prefs.begin("vault", false);
+
+  String previousMD5 = prefs.getString("fwmd5", "");
+
+  prefs.end();
+
+  Serial.println();
+  Serial.println("Firmware Information:");
+
+  Serial.print("Current: ");
+  Serial.println(currentMD5);
+
+  Serial.print("Previous: ");
+  Serial.println(previousMD5);
+
+  // Same firmware: preserve data
+
+  if (previousMD5 == currentMD5) {
+
+    Serial.println("SAME FIRMWARE DETECTED");
+    Serial.println("All existing data preserved.");
+
+    return false;
+  }
+
+  Serial.println();
+  Serial.println("================================");
+  Serial.println("NEW FIRMWARE DETECTED");
+  Serial.println("STARTING AUTOMATIC FULL RESET");
+  Serial.println("================================");
+
+  // Mount LittleFS
+
+  bool mounted = LittleFS.begin(false);
+
+  if (!mounted) {
+
+    Serial.println("LittleFS mount failed.");
+    Serial.println("Trying format mount...");
+
+    mounted = LittleFS.begin(true);
+
+  }
+
+  if (!mounted) {
+
+    Serial.println("LittleFS unavailable.");
+    Serial.println("Reset cancelled.");
+
+    return false;
+  }
+
+  // Format all files
+
+  bool formatOK = LittleFS.format();
+
+  if (!formatOK) {
+
+    Serial.println("LittleFS FORMAT FAILED.");
+    Serial.println("Reset cancelled.");
+
+    return false;
+  }
+
+  Serial.println("LittleFS formatted successfully.");
+
+  fsReady = true;
+
+  // Clear all account and settings
+
+  prefs.begin("vault", false);
+
+  prefs.clear();
+
+  // Save new firmware identifier
+
+  prefs.putString("fwmd5", currentMD5);
+
+  prefs.end();
+
+  // Clear RAM variables
+
+  vaultUser = "";
+  vaultHash = "";
+  vaultSalt = "";
+  sessionID = "";
+
+  currentTheme = "light";
+  currentAccent = "#2563eb";
+
+  Serial.println("Old account deleted.");
+  Serial.println("Old password deleted.");
+  Serial.println("All files deleted.");
+  Serial.println("All folders deleted.");
+  Serial.println("All documents deleted.");
+  Serial.println("All settings deleted.");
+
+  Serial.println();
+  Serial.println("================================");
+  Serial.println("FRESH SETUP READY");
+  Serial.println("================================");
+
+  return true;
+}
+
+// ========================================================
+// WEB PAGE
+// ========================================================
 
 const char PAGE[] PROGMEM = R"HTML(
 <!DOCTYPE html>
@@ -70,10 +195,13 @@ const char PAGE[] PROGMEM = R"HTML(
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+
 <title>Technical BD Server</title>
 
 <style>
+
 :root{--a:#2563eb}
+
 *{box-sizing:border-box}
 
 body{
@@ -320,8 +448,6 @@ hr{
  color:white;
 }
 
-.modalBox h3{margin-top:0}
-
 .dangerText{
  color:#dc2626;
  font-weight:bold;
@@ -357,142 +483,149 @@ hr{
 
 <main>
 
-<!-- AUTH -->
-
 <div id="auth" class="card">
- <h2 id="authTitle">Login</h2>
 
- <input id="username" placeholder="Username"
- autocomplete="username">
+<h2 id="authTitle">Login</h2>
 
- <input id="password" type="password"
- placeholder="Password" autocomplete="current-password">
+<input id="username" placeholder="Username"
+autocomplete="username">
 
- <button onclick="login()">Continue</button>
+<input id="password" type="password"
+placeholder="Password" autocomplete="current-password">
 
- <p id="authMsg"></p>
+<button onclick="login()">Continue</button>
+
+<p id="authMsg"></p>
+
 </div>
 
 <div id="app" class="hidden">
 
-<!-- NAVIGATION -->
-
 <div class="card">
- <nav>
-  <button onclick="newFolder()">+ Folder</button>
-  <button onclick="newNote()">+ Text Document</button>
-  <button onclick="goBack()" class="gray">← Back</button>
-  <button onclick="showTrash()" class="gray">Delete Box</button>
-  <button onclick="showSettings()" class="gray">Settings</button>
-  <button onclick="logout()" class="red">Logout</button>
- </nav>
-</div>
 
-<!-- STORAGE -->
+<nav>
+
+<button onclick="newFolder()">+ Folder</button>
+
+<button onclick="newNote()">+ Text Document</button>
+
+<button onclick="goBack()" class="gray">← Back</button>
+
+<button onclick="showTrash()" class="gray">Delete Box</button>
+
+<button onclick="showSettings()" class="gray">Settings</button>
+
+<button onclick="logout()" class="red">Logout</button>
+
+</nav>
+
+</div>
 
 <div id="storageCard" class="card">
- <h3>Storage Information</h3>
 
- <div id="storageBar">
-  <div id="storageUsed"></div>
- </div>
+<h3>Storage Information</h3>
 
- <p id="storageText">Loading...</p>
+<div id="storageBar">
+<div id="storageUsed"></div>
 </div>
 
-<!-- FILES -->
+<p id="storageText">Loading...</p>
+
+</div>
 
 <div id="filesCard" class="card">
- <h3>My Files</h3>
 
- <div id="crumb"></div>
- <div id="files"></div>
+<h3>My Files</h3>
 
- <p id="emptyMsg" class="small"></p>
+<div id="crumb"></div>
+
+<div id="files"></div>
+
+<p id="emptyMsg" class="small"></p>
+
 </div>
-
-<!-- DELETE BOX -->
 
 <div id="trash" class="card hidden">
- <h3>Delete Box</h3>
 
- <div id="trashFiles"></div>
+<h3>Delete Box</h3>
 
- <button class="red" onclick="emptyTrash()">
-  Empty Delete Box
- </button>
+<div id="trashFiles"></div>
 
- <button class="gray" onclick="showHome()">Back</button>
+<button class="red" onclick="emptyTrash()">
+Empty Delete Box
+</button>
+
+<button class="gray" onclick="showHome()">Back</button>
+
 </div>
-
-<!-- SETTINGS -->
 
 <div id="settings" class="card hidden">
 
- <h3>Settings</h3>
+<h3>Settings</h3>
 
- <label>Theme</label>
+<label>Theme</label>
 
- <select id="theme">
-  <option value="light">Light</option>
-  <option value="dark">Dark</option>
- </select>
+<select id="theme">
+<option value="light">Light</option>
+<option value="dark">Dark</option>
+</select>
 
- <label>Accent Color</label>
- <input id="accent" type="color" value="#2563eb">
+<label>Accent Color</label>
 
- <button onclick="saveSettings()">Save Settings</button>
+<input type="color" id="accent" value="#2563eb">
 
- <hr>
+<button onclick="saveSettings()">Save Settings</button>
 
- <h3>Change Password</h3>
+<hr>
 
- <input id="oldPass" type="password"
- placeholder="Current password">
+<h3>Change Password</h3>
 
- <input id="newPass" type="password"
- placeholder="New password">
+<input id="oldPass" type="password"
+placeholder="Current password">
 
- <button onclick="changePassword()">Change Password</button>
+<input id="newPass" type="password"
+placeholder="New password">
 
- <button class="gray" onclick="backup()">Export Backup</button>
+<button onclick="changePassword()">Change Password</button>
 
- <hr>
+<button class="gray" onclick="backup()">Export Backup</button>
 
- <h3>All Data Reset</h3>
+<hr>
 
- <p class="dangerText">
- Warning: This will permanently erase all files,
- folders, documents, Delete Box data and account settings.
- This action cannot be undone.
- </p>
+<h3>All Data Reset</h3>
 
- <button class="red" onclick="openResetModal()">
- All Data Reset
- </button>
+<p class="dangerText">
+Warning: This will permanently erase all files,
+folders, documents, Delete Box data and account settings.
+</p>
 
- <br>
+<button class="red" onclick="openResetModal()">
+All Data Reset
+</button>
 
- <button class="gray" onclick="showHome()">Back</button>
+<br>
+
+<button class="gray" onclick="showHome()">Back</button>
+
+</div>
 
 </div>
 
-</div>
 </main>
 
 <!-- EDITOR -->
 
 <div id="editor" class="hidden">
 
- <div>
-  <button onclick="saveNote()">Save</button>
-  <button class="gray" onclick="closeEditor()">Close</button>
- </div>
+<div>
+<button onclick="saveNote()">Save</button>
+<button class="gray" onclick="closeEditor()">Close</button>
+</div>
 
- <input id="editTitle" placeholder="Document name">
+<input id="editTitle" placeholder="Document name">
 
- <textarea id="editContent"
- placeholder="Start writing here..."></textarea>
+<textarea id="editContent"
+placeholder="Start writing here..."></textarea>
 
 </div>
 
@@ -500,46 +633,40 @@ hr{
 
 <div id="resetModal" class="modal hidden">
 
- <div class="modalBox">
+<div class="modalBox">
 
-  <h3>⚠️ Confirm All Data Reset</h3>
+<h3>Confirm All Data Reset</h3>
 
-  <p class="dangerText">
-   All your data will be permanently erased.
-   Your account will also be removed.
-  </p>
+<p class="dangerText">
+All your data will be permanently erased.
+</p>
 
-  <input id="resetUser" placeholder="Current username"
-  autocomplete="username">
+<input id="resetUser" placeholder="Current username">
 
-  <input id="resetPass" type="password"
-  placeholder="Current password"
-  autocomplete="current-password">
+<input id="resetPass" type="password"
+placeholder="Current password">
 
-  <label>Type RESET to confirm</label>
+<label>Type RESET to confirm</label>
 
-  <input id="resetWord" placeholder="Type RESET">
+<input id="resetWord" placeholder="Type RESET">
 
-  <label class="checkLine">
-   <input type="checkbox" id="resetCheck">
-   I understand that all data will be erased.
-  </label>
+<label class="checkLine">
+<input type="checkbox" id="resetCheck">
+I understand that all data will be erased.
+</label>
 
-  <div class="modalActions">
+<div class="modalActions">
 
-   <button class="gray" onclick="closeResetModal()">
-    Cancel
-   </button>
+<button class="gray" onclick="closeResetModal()">Cancel</button>
 
-   <button class="red" onclick="performReset()">
-    Permanently Reset
-   </button>
+<button class="red" onclick="performReset()">Permanently Reset</button>
 
-  </div>
+</div>
 
-  <p id="resetMsg"></p>
+<p id="resetMsg"></p>
 
- </div>
+</div>
+
 </div>
 
 <script>
@@ -559,6 +686,7 @@ function api(url,method,data,cb){
  let x=new XMLHttpRequest();
 
  x.open(method,url,true);
+
  x.setRequestHeader("Content-Type","application/json");
 
  x.onreadystatechange=function(){
@@ -574,8 +702,7 @@ function api(url,method,data,cb){
   if(x.status>=200 && x.status<300){
    cb(null,result);
   }else{
-   cb(result.error || x.responseText ||
-   ("HTTP Error "+x.status),result);
+   cb(result.error || x.responseText || ("HTTP Error "+x.status),result);
   }
 
  };
@@ -585,6 +712,7 @@ function api(url,method,data,cb){
  };
 
  x.send(data===null?null:JSON.stringify(data));
+
 }
 
 // ---------------- INITIALIZE ----------------
@@ -601,8 +729,7 @@ function initialize(){
   if(d.loggedIn){
    openApp();
   }else{
-   E("authTitle").innerText=
-    d.setup?"Create Account":"Login";
+   E("authTitle").innerText=d.setup?"Create Account":"Login";
   }
 
  });
@@ -624,8 +751,7 @@ function login(){
   }
 
   if(s.setup && (u.length<3 || p.length<8)){
-   E("authMsg").innerText=
-   "Username minimum 3 and password minimum 8 characters";
+   E("authMsg").innerText="Username minimum 3 and password minimum 8 characters";
    return;
   }
 
@@ -703,8 +829,7 @@ function renderFiles(){
  box.innerHTML="";
 
  let visible=items.filter(x=>
-  !x.deleted &&
-  String(x.parent||"")===currentFolder
+  !x.deleted && String(x.parent||"")===currentFolder
  );
 
  visible.sort((a,b)=>{
@@ -717,8 +842,7 @@ function renderFiles(){
 
  });
 
- E("emptyMsg").innerText=
-  visible.length?"":"This folder is empty.";
+ E("emptyMsg").innerText=visible.length?"":"This folder is empty.";
 
  visible.forEach(x=>{
 
@@ -738,8 +862,6 @@ function renderFiles(){
   let actions=document.createElement("div");
   actions.className="actions";
 
-  // OPEN BUTTON
-
   let open=document.createElement("button");
   open.textContent="OPEN";
   open.className="openBtn";
@@ -754,8 +876,6 @@ function renderFiles(){
 
   };
 
-  // THREE DOT MENU
-
   let wrap=document.createElement("div");
   wrap.className="menuWrap";
 
@@ -765,8 +885,6 @@ function renderFiles(){
 
   let menu=document.createElement("div");
   menu.className="menuPanel";
-
-  // DELETE BOX
 
   let trashBtn=document.createElement("button");
   trashBtn.textContent="Delete Box";
@@ -782,8 +900,6 @@ function renderFiles(){
 
   };
 
-  // PERMANENT DELETE
-
   let deleteBtn=document.createElement("button");
   deleteBtn.textContent="Delete";
   deleteBtn.className="red";
@@ -792,10 +908,7 @@ function renderFiles(){
 
    menu.style.display="none";
 
-   if(confirm(
-    "Permanently delete "+x.title+
-    " and everything inside it? This cannot be undone."
-   )){
+   if(confirm("Permanently delete "+x.title+" and everything inside it?")){
     trashAction("/api/purge",x.id);
    }
 
@@ -816,8 +929,6 @@ function renderFiles(){
     return;
    }
 
-   // First open on the right.
-
    menu.style.left="calc(100% + 8px)";
    menu.style.right="auto";
    menu.style.display="block";
@@ -825,8 +936,6 @@ function renderFiles(){
    requestAnimationFrame(()=>{
 
     let rect=menu.getBoundingClientRect();
-
-    // Open left only if right side has no space.
 
     if(rect.right>window.innerWidth-8){
      menu.style.left="auto";
@@ -849,8 +958,6 @@ function renderFiles(){
  renderBreadcrumb();
 
 }
-
-// Close open menus when clicking outside.
 
 document.addEventListener("click",()=>{
 
@@ -914,8 +1021,7 @@ function goBack(){
 
   path.pop();
 
-  currentFolder=
-   path.length?path[path.length-1].id:"";
+  currentFolder=path.length?path[path.length-1].id:"";
 
   renderFiles();
 
@@ -991,8 +1097,7 @@ function saveNote(){
   return;
  }
 
- let content=
-  editType==="folder"?"":E("editContent").value;
+ let content=editType==="folder"?"":E("editContent").value;
 
  api("/api/save","POST",{
 
@@ -1067,9 +1172,7 @@ function showTrash(){
    div.className="file";
 
    let name=document.createElement("b");
-
-   name.textContent=
-    (x.type==="folder"?"📁 ":"📄 ")+x.title;
+   name.textContent=(x.type==="folder"?"📁 ":"📄 ")+x.title;
 
    let restore=document.createElement("button");
    restore.textContent="Restore";
@@ -1085,20 +1188,13 @@ function showTrash(){
 
    del.onclick=()=>{
 
-    if(confirm(
-     "Permanently delete this item and its contents?"
-    )){
+    if(confirm("Permanently delete this item and its contents?")){
      trashAction("/api/purge",x.id);
     }
 
    };
 
-   div.append(
-    name,
-    document.createElement("br"),
-    restore,
-    del
-   );
+   div.append(name,document.createElement("br"),restore,del);
 
    box.appendChild(div);
 
@@ -1126,9 +1222,7 @@ function trashAction(url,id){
 
 function emptyTrash(){
 
- if(!confirm(
-  "Permanently delete all items in Delete Box?"
- ))return;
+ if(!confirm("Permanently delete all items in Delete Box?"))return;
 
  api("/api/empty","POST",{},e=>{
 
@@ -1242,7 +1336,7 @@ function backup(){
 
 }
 
-// ---------------- ALL DATA RESET ----------------
+// ---------------- MANUAL RESET ----------------
 
 function openResetModal(){
 
@@ -1269,26 +1363,21 @@ function performReset(){
  let word=E("resetWord").value.trim();
 
  if(!username || !password){
-  E("resetMsg").innerText=
-   "Enter your current username and password.";
+  E("resetMsg").innerText="Enter your current username and password.";
   return;
  }
 
  if(word!=="RESET"){
-  E("resetMsg").innerText=
-   "Please type RESET correctly.";
+  E("resetMsg").innerText="Please type RESET correctly.";
   return;
  }
 
  if(!E("resetCheck").checked){
-  E("resetMsg").innerText=
-   "Please confirm that you understand.";
+  E("resetMsg").innerText="Please confirm that you understand.";
   return;
  }
 
- if(!confirm(
-  "FINAL WARNING: All files, folders, account data and settings will be erased. Continue?"
- ))return;
+ if(!confirm("FINAL WARNING: All data will be erased. Continue?"))return;
 
  E("resetMsg").innerText="Verifying and resetting...";
 
@@ -1303,8 +1392,7 @@ function performReset(){
    return;
   }
 
-  E("resetMsg").innerText=
-   "Reset successful. ESP32 is restarting...";
+  E("resetMsg").innerText="Reset successful. Restarting...";
 
   setTimeout(()=>{
    location.reload();
@@ -1331,8 +1419,7 @@ function loadStorage(){
  api("/api/storage","GET",null,(e,d)=>{
 
   if(e){
-   E("storageText").innerText=
-    "Storage information unavailable: "+e;
+   E("storageText").innerText="Storage unavailable: "+e;
    return;
   }
 
@@ -1358,9 +1445,7 @@ function formatBytes(n){
 
  if(n<1024)return n+" B";
 
- if(n<1048576){
-  return (n/1024).toFixed(1)+" KB";
- }
+ if(n<1048576)return (n/1024).toFixed(1)+" KB";
 
  return (n/1048576).toFixed(2)+" MB";
 
@@ -1373,7 +1458,9 @@ initialize();
 </html>
 )HTML";
 
-// ---------------- SHA256 ----------------
+// ========================================================
+// SHA256
+// ========================================================
 
 String sha256Hex(String input){
 
@@ -1391,15 +1478,19 @@ String sha256Hex(String input){
  String out="";
 
  for(int i=0;i<32;i++){
+
   out+=h[hash[i]>>4];
   out+=h[hash[i]&15];
+
  }
 
  return out;
 
 }
 
-// ---------------- ID ----------------
+// ========================================================
+// ID GENERATOR
+// ========================================================
 
 String makeID(){
 
@@ -1415,7 +1506,9 @@ String makeID(){
 
 }
 
-// ---------------- AUTH ----------------
+// ========================================================
+// AUTHENTICATION
+// ========================================================
 
 bool loggedIn(){
 
@@ -1453,7 +1546,9 @@ void setCookie(){
 
 }
 
-// ---------------- JSON HELPERS ----------------
+// ========================================================
+// JSON HELPERS
+// ========================================================
 
 bool readJSON(DynamicJsonDocument &d){
 
@@ -1480,7 +1575,9 @@ void sendError(int code,String message){
 
 }
 
-// ---------------- DATABASE SAVE ----------------
+// ========================================================
+// DATABASE SAVE
+// ========================================================
 
 bool saveDB(){
 
@@ -1552,7 +1649,9 @@ bool saveDB(){
 
 }
 
-// ---------------- DATABASE LOAD ----------------
+// ========================================================
+// DATABASE LOAD
+// ========================================================
 
 bool loadDB(){
 
@@ -1595,7 +1694,9 @@ bool loadDB(){
 
 }
 
-// ---------------- PREFERENCES ----------------
+// ========================================================
+// PREFERENCES
+// ========================================================
 
 void loadPreferences(){
 
@@ -1621,7 +1722,9 @@ void savePreferences(){
 
 }
 
-// ---------------- STATUS ----------------
+// ========================================================
+// STATUS
+// ========================================================
 
 void handleStatus(){
 
@@ -1638,7 +1741,9 @@ void handleStatus(){
 
 }
 
-// ---------------- ACCOUNT SETUP ----------------
+// ========================================================
+// ACCOUNT SETUP
+// ========================================================
 
 void handleSetup(){
 
@@ -1658,11 +1763,14 @@ void handleSetup(){
  String p=d["password"]|"";
 
  if(u.length()<3 || p.length()<8){
+
   sendError(
    400,
    "Username minimum 3 and password minimum 8 characters"
   );
+
   return;
+
  }
 
  vaultUser=u;
@@ -1679,7 +1787,9 @@ void handleSetup(){
 
 }
 
-// ---------------- LOGIN ----------------
+// ========================================================
+// LOGIN
+// ========================================================
 
 void handleLogin(){
 
@@ -1694,8 +1804,11 @@ void handleLogin(){
  String p=d["password"]|"";
 
  if(u!=vaultUser || sha256Hex(vaultSalt+p)!=vaultHash){
+
   sendError(401,"Wrong username or password");
+
   return;
+
  }
 
  sessionID=makeID();
@@ -1706,7 +1819,9 @@ void handleLogin(){
 
 }
 
-// ---------------- LOGOUT ----------------
+// ========================================================
+// LOGOUT
+// ========================================================
 
 void handleLogout(){
 
@@ -1721,7 +1836,9 @@ void handleLogout(){
 
 }
 
-// ---------------- ITEMS ----------------
+// ========================================================
+// ITEMS
+// ========================================================
 
 void handleItems(){
 
@@ -1737,7 +1854,9 @@ void handleItems(){
 
 }
 
-// ---------------- VALID PARENT ----------------
+// ========================================================
+// VALID PARENT
+// ========================================================
 
 bool validParent(String parent){
 
@@ -1759,7 +1878,9 @@ bool validParent(String parent){
 
 }
 
-// ---------------- SAVE ITEM ----------------
+// ========================================================
+// SAVE ITEM
+// ========================================================
 
 void handleSave(){
 
@@ -1853,7 +1974,9 @@ void handleSave(){
 
 }
 
-// ---------------- MOVE TO DELETE BOX ----------------
+// ========================================================
+// MOVE TO DELETE BOX
+// ========================================================
 
 void handleTrash(){
 
@@ -1896,7 +2019,9 @@ void handleTrash(){
 
 }
 
-// ---------------- RESTORE ----------------
+// ========================================================
+// RESTORE
+// ========================================================
 
 void handleRestore(){
 
@@ -1939,7 +2064,9 @@ void handleRestore(){
 
 }
 
-// ---------------- PERMANENT DELETE ----------------
+// ========================================================
+// PERMANENT RECURSIVE DELETE
+// ========================================================
 
 void handlePurge(){
 
@@ -1962,8 +2089,6 @@ void handlePurge(){
  JsonArray arr=db["items"].as<JsonArray>();
 
  bool found=false;
-
- // Collect root and all descendant IDs.
 
  std::vector<String> removeIDs;
 
@@ -2016,8 +2141,6 @@ void handlePurge(){
 
  }
 
- // Remove all collected items.
-
  for(int i=(int)arr.size()-1;i>=0;i--){
 
   JsonObject x=arr[i];
@@ -2052,15 +2175,15 @@ void handlePurge(){
 
 }
 
-// ---------------- EMPTY DELETE BOX ----------------
+// ========================================================
+// EMPTY DELETE BOX
+// ========================================================
 
 void handleEmpty(){
 
  if(!auth())return;
 
  JsonArray arr=db["items"].as<JsonArray>();
-
- // Collect IDs of deleted items and their descendants.
 
  std::vector<String> removeIDs;
 
@@ -2144,7 +2267,9 @@ void handleEmpty(){
 
 }
 
-// ---------------- STORAGE ----------------
+// ========================================================
+// STORAGE
+// ========================================================
 
 void handleStorage(){
 
@@ -2156,8 +2281,10 @@ void handleStorage(){
  uint32_t used=0;
 
  if(fsReady){
+
   total=LittleFS.totalBytes();
   used=LittleFS.usedBytes();
+
  }
 
  d["total"]=total;
@@ -2173,7 +2300,9 @@ void handleStorage(){
 
 }
 
-// ---------------- GET SETTINGS ----------------
+// ========================================================
+// GET SETTINGS
+// ========================================================
 
 void handleGetSettings(){
 
@@ -2192,7 +2321,9 @@ void handleGetSettings(){
 
 }
 
-// ---------------- SAVE SETTINGS ----------------
+// ========================================================
+// SAVE SETTINGS
+// ========================================================
 
 void handleSaveSettings(){
 
@@ -2225,7 +2356,9 @@ void handleSaveSettings(){
 
 }
 
-// ---------------- CHANGE PASSWORD ----------------
+// ========================================================
+// CHANGE PASSWORD
+// ========================================================
 
 void handlePassword(){
 
@@ -2260,7 +2393,9 @@ void handlePassword(){
 
 }
 
-// ---------------- EXPORT ----------------
+// ========================================================
+// EXPORT BACKUP
+// ========================================================
 
 void handleExport(){
 
@@ -2289,11 +2424,11 @@ void handleExport(){
 
 }
 
-// ---------------- ALL DATA RESET ----------------
+// ========================================================
+// MANUAL ALL DATA RESET
+// ========================================================
 
 void handleReset(){
-
- // Reset request must contain valid JSON.
 
  DynamicJsonDocument d(512);
 
@@ -2305,8 +2440,6 @@ void handleReset(){
  String u=d["username"]|"";
  String p=d["password"]|"";
  String confirmWord=d["confirm"]|"";
-
- // Server-side credential verification.
 
  if(u!=vaultUser ||
     sha256Hex(vaultSalt+p)!=vaultHash){
@@ -2326,8 +2459,6 @@ void handleReset(){
   return;
  }
 
- // First send response, then erase data and restart.
-
  server.send(
   200,
   "application/json",
@@ -2336,19 +2467,13 @@ void handleReset(){
 
  delay(500);
 
- Serial.println();
- Serial.println("================================");
- Serial.println("TECHNICAL BD SERVER DATA RESET");
- Serial.println("================================");
-
- // Clear persistent file storage.
+ Serial.println("MANUAL FULL RESET");
 
  bool formatOK=LittleFS.format();
 
- Serial.print("LittleFS format: ");
- Serial.println(formatOK?"SUCCESS":"FAILED");
-
- // Clear account and settings storage.
+ if(!formatOK){
+  Serial.println("LittleFS format FAILED.");
+ }
 
  prefs.clear();
  prefs.end();
@@ -2358,16 +2483,15 @@ void handleReset(){
  vaultHash="";
  vaultSalt="";
 
- Serial.println("Preferences cleared.");
- Serial.println("Restarting ESP32...");
-
  delay(700);
 
  ESP.restart();
 
 }
 
-// ---------------- ROOT ----------------
+// ========================================================
+// ROOT
+// ========================================================
 
 void handleRoot(){
 
@@ -2375,7 +2499,9 @@ void handleRoot(){
 
 }
 
-// ---------------- SETUP ----------------
+// ========================================================
+// SETUP
+// ========================================================
 
 void setup(){
 
@@ -2386,9 +2512,10 @@ void setup(){
  Serial.println();
  Serial.println("Starting Technical BD Server");
 
- // WiFi Access Point
+ // ---------------- WIFI ----------------
 
  WiFi.mode(WIFI_AP);
+
  WiFi.setSleep(false);
 
  bool ap=WiFi.softAP(
@@ -2417,14 +2544,21 @@ void setup(){
  Serial.print("IP: ");
  Serial.println(WiFi.softAPIP());
 
- // LittleFS
+ // ---------------- FIRMWARE CHECK ----------------
 
- fsReady=LittleFS.begin(false);
+ bool firmwareReset=checkFirmwareAndReset();
+
+ if(!firmwareReset){
+
+  // Same firmware: mount existing filesystem
+
+  fsReady=LittleFS.begin(false);
+
+ }
 
  if(!fsReady){
 
   Serial.println("LittleFS mount failed.");
-  Serial.println("Automatic formatting disabled.");
 
  }else{
 
@@ -2432,11 +2566,11 @@ void setup(){
 
  }
 
- // Preferences
+ // ---------------- PREFERENCES ----------------
 
  loadPreferences();
 
- // Database
+ // ---------------- DATABASE ----------------
 
  if(fsReady){
 
@@ -2450,33 +2584,40 @@ void setup(){
 
  }
 
- // Cookie header
+ // ---------------- COOKIE HEADER ----------------
 
  const char* headers[]={"Cookie"};
 
  server.collectHeaders(headers,1);
 
- // Routes
+ // ---------------- ROUTES ----------------
 
  server.on("/",HTTP_GET,handleRoot);
 
  server.on("/api/status",HTTP_GET,handleStatus);
 
  server.on("/api/setup",HTTP_POST,handleSetup);
+
  server.on("/api/login",HTTP_POST,handleLogin);
+
  server.on("/api/logout",HTTP_POST,handleLogout);
 
  server.on("/api/items",HTTP_GET,handleItems);
+
  server.on("/api/save",HTTP_POST,handleSave);
 
  server.on("/api/trash",HTTP_POST,handleTrash);
+
  server.on("/api/restore",HTTP_POST,handleRestore);
+
  server.on("/api/purge",HTTP_POST,handlePurge);
+
  server.on("/api/empty",HTTP_POST,handleEmpty);
 
  server.on("/api/storage",HTTP_GET,handleStorage);
 
  server.on("/api/settings",HTTP_GET,handleGetSettings);
+
  server.on("/api/settings",HTTP_POST,handleSaveSettings);
 
  server.on("/api/password",HTTP_POST,handlePassword);
@@ -2495,14 +2636,29 @@ void setup(){
 
  });
 
+ // ---------------- SERVER START ----------------
+
  server.begin();
 
+ Serial.println();
  Serial.println("HTTP SERVER STARTED");
  Serial.println("Open http://192.168.4.1");
 
+ if(vaultUser.length()==0){
+
+  Serial.println("ACCOUNT SETUP REQUIRED");
+
+ }else{
+
+  Serial.println("EXISTING ACCOUNT FOUND");
+
+ }
+
 }
 
-// ---------------- LOOP ----------------
+// ========================================================
+// LOOP
+// ========================================================
 
 void loop(){
 
