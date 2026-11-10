@@ -6,7 +6,7 @@ ESP32-C3 Super Mini – Offline Wi-Fi File Server & File Manager
 
 🎥 YouTube Project Demonstration
 
-ESP32-C3 Web Server তৈরি করুন! No Internet Needed | Offline File Manager
+ESP32-C3 Web Server making! No Internet Needed | Offline File Manager
 
 Watch the complete project demonstration on the Technical BD YouTube channel.
 
@@ -19,8 +19,7 @@ This project demonstrates how to build a personal offline Wi-Fi file server usin
 YouTube Video Link:
 https://youtu.be/2TT7Qtrjc7I
 
-YouTube Channel: Technical BD
-
+YouTube Channel:https://youtube.com/@technicalbdvrj?si=1xYAIBJwBnCJozmQ
 ---
 
 🇬🇧 English Description
@@ -106,9 +105,5 @@ TECHNICAL BD SERVER হলো ESP32-C3 Super Mini ব্যবহার কর�
 👨‍💻 Project Developer
 
 Technical BD
-
-YouTube: https://www.youtube.com/@TechnicalBD
-
-GitHub: https://github.com/
-
+YouTube Channel:https://youtube.com/@technicalbdvrj?si=1xYAIBJwBnCJozmQ
 Learn • Build • Experiment • Create
